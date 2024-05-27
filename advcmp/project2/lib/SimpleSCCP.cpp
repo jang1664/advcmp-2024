@@ -103,19 +103,25 @@ ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitPHINode(const PHINode
  */
 ConstantValue
 SimpleSCCPAnalysis::InstructionVisitor::visitBranchInst(const BranchInst &I) {
+  // errs() << "In visitBranchInst, BranchInst is analyzed" << "\n";
   if (I.isConditional()) {
+    // errs() << "Instruction" << I.getName() << " is conditional" << "\n";
     Value &Condition = *I.getCondition();
     ConstantValue C = ThePass.getConstantValue(Condition);
 
     if (C.isConstant()) {
+      // errs() << "Condition of Instruction" << I.getName() << " is constant" << "\n";
       if (C.value() != 0) {
+        // errs() << "Edge " << CFGEdge{I.getParent(), I.getSuccessor(0)} << " is inserted" << "\n";
         ThePass.ExecutableEdges.insert({I.getParent(), I.getSuccessor(0)});
         ThePass.CFGWorkset.insert({I.getParent(), I.getSuccessor(0)});
       } else {
+        // errs() << "Edge " << CFGEdge{I.getParent(), I.getSuccessor(1)} << " is inserted" << "\n";
         ThePass.ExecutableEdges.insert({I.getParent(), I.getSuccessor(1)});
         ThePass.CFGWorkset.insert({I.getParent(), I.getSuccessor(1)});
       }
     } else {
+      // errs() << "Condition of Instruction" << I.getName() << " is not constant" << "\n";
       ThePass.appendExecutableSuccessors(I);
     }
   } else {
@@ -266,6 +272,15 @@ void SimpleSCCPAnalysis::analyze(Function &F) {
       CFGEdge Edge = *CFGWorkset.begin();
       const BasicBlock *ToBlock = Edge.To;
       CFGWorkset.erase(Edge);
+      ExecutableEdges.insert(Edge);
+
+      // errs() << "In analyze, CFGEdge is analyzed" << "\n";
+      if(Edge.From != nullptr) {
+        // errs() << "FromBlock: " << Edge.From->getName() << "\n";
+      }
+      if(ToBlock != nullptr) {
+        // errs() << "ToBlock: " << ToBlock->getName() << "\n";
+      }
 
       // visit phis
       for(const PHINode &Phi : ToBlock->phis()) {
@@ -275,9 +290,11 @@ void SimpleSCCPAnalysis::analyze(Function &F) {
       // visit instructions if it is the first visit
       if(isFirstVisit(*ToBlock)) {
         for(const Instruction &I : *ToBlock) {
-          if(isa<PHINode>(I)) {
+          if(dyn_cast<PHINode>(&I)) {
+            // errs() << "hi" << "\n";
             continue;
           } else {
+            // errs() << "Instruction " << I.getName() << " is visited" << "\n";
             visit(I);
           }
         }
@@ -285,12 +302,13 @@ void SimpleSCCPAnalysis::analyze(Function &F) {
 
       // if one successor, add to CFGset
       const Instruction *TI = ToBlock->getTerminator();
+      // errs() << "Terminator " << TI->getName() << "has " << TI->getNumSuccessors() << " successors" << "\n";
       if(TI->getNumSuccessors() == 1) {
         CFGEdge NewEdge = {ToBlock, TI->getSuccessor(0)};
         if(ExecutableEdges.count(NewEdge) == 0) {
           ExecutableEdges.insert(NewEdge);
-          CFGWorkset.insert(NewEdge);
         }
+        CFGWorkset.insert(NewEdge);
       }
     } else {
       const Instruction *V = *SSAWorkset.begin();
@@ -354,7 +372,7 @@ bool SimpleSCCPAnalysis::isFirstVisit(const BasicBlock &BB) {
   }
   if (ExecutableIncomingEdgeCount != 1)
     return false;
-  return true;
+  return true; // true when only one
 }
 
 bool SimpleSCCPAnalysis::isExecutableBlock(const BasicBlock &BB) {
@@ -374,8 +392,10 @@ bool SimpleSCCPAnalysis::isExecutableEdge(const CFGEdge &CE) {
 void SimpleSCCPAnalysis::appendExecutableSuccessors(const BranchInst &I) {
   for (const BasicBlock *BB : I.successors()) {
     CFGEdge Candidate = CFGEdge{I.getParent(), BB};
-    if (ExecutableEdges.count(Candidate) == 0)
+    if (ExecutableEdges.count(Candidate) == 0) {
+      // errs() << "Edge " << Candidate << " is inserted" << "\n";
       CFGWorkset.insert(Candidate);
+    }
   }
 }
 
@@ -413,7 +433,7 @@ raw_ostream &operator<<(raw_ostream &ROS, const CFGEdge &CE) {
   if (CE.To)
     To = CE.To->getName();
 
-  errs() << From << " -> " << To;
+  // errs() << From << " -> " << To;
 
   return ROS;
 }

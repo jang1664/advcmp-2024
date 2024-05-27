@@ -1,0 +1,7 @@
+%add : { 3 }
+  br i1 %cmp, label %if.then, label %if.end : { TOP }
+%add1 : { 5 }
+%cmp : { 0 }
+%call : { BOTTOM }
+  ret i32 0 : { BOTTOM }
+%z.0 : { 5 }
