@@ -74,8 +74,17 @@ ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitPHINode(const PHINode
   ConstantValue NewValue = ConstantValue::top();
   //* TODO 1 - visit(phi)
   //******************************** TODO 1 ********************************
+  const BasicBlock *FromBlock = I.getParent();
   for (int i = 0, n = I.getNumIncomingValues(); i < n; ++i) {
-    // TODO
+    Value *IncomingValue = I.getIncomingValue(i);
+    if(Instruction *I = dyn_cast<Instruction>(IncomingValue)) {
+      const BasicBlock *ToBlock = I->getParent();
+      CFGEdge Edge = {ToBlock, FromBlock};
+      if(ThePass.isExecutableEdge(Edge)) {
+        ConstantValue IncomingConstant = ThePass.getConstantValue(*IncomingValue);
+        NewValue = NewValue.meet(IncomingConstant);
+      }
+    }
   }
   //****************************** TODO 1 END ******************************
   return NewValue;
@@ -253,7 +262,45 @@ void SimpleSCCPAnalysis::analyze(Function &F) {
   //* TODO 2 - Algorithm 1 : SCCP
   //******************************* TODO 2 *******************************
   while (!CFGWorkset.empty() || !SSAWorkset.empty()) {
-    // TODO
+    if(!CFGWorkset.empty()) {
+      CFGEdge Edge = *CFGWorkset.begin();
+      const BasicBlock *ToBlock = Edge.To;
+      CFGWorkset.erase(Edge);
+
+      // visit phis
+      for(const PHINode &Phi : ToBlock->phis()) {
+        visit(Phi);
+      }
+
+      // visit instructions if it is the first visit
+      if(isFirstVisit(*ToBlock)) {
+        for(const Instruction &I : *ToBlock) {
+          if(isa<PHINode>(I)) {
+            continue;
+          } else {
+            visit(I);
+          }
+        }
+      }
+
+      // if one successor, add to CFGset
+      const Instruction *TI = ToBlock->getTerminator();
+      if(TI->getNumSuccessors() == 1) {
+        CFGEdge NewEdge = {ToBlock, TI->getSuccessor(0)};
+        if(ExecutableEdges.count(NewEdge) == 0) {
+          ExecutableEdges.insert(NewEdge);
+          CFGWorkset.insert(NewEdge);
+        }
+      }
+    } else {
+      const Instruction *V = *SSAWorkset.begin();
+      SSAWorkset.erase(V);
+      if(isa<PHINode>(*V)) {
+        visit(*dyn_cast<PHINode>(V));
+      } else if(isExecutableBlock(*V->getParent())) {
+          visit(*V);
+      }
+    }
   }
   //***************************** TODO 2 END *****************************
 }
@@ -269,12 +316,27 @@ void SimpleSCCPAnalysis::visit(const Instruction &I) {
 
   //* TODO 3 - Algorithm 2 : visit
   //******************************** TODO 3 ********************************
+  const Value *V = dyn_cast<Value>(&I);
+  Value *V_ = const_cast<Value*>(V);
   auto OldLatticeValueIt = DataflowFacts.find(&I);
-  if (OldLatticeValueIt != DataflowFacts.end())
-    OldLatticeValue = OldLatticeValueIt->second;
 
-  if (NewLatticeValue != OldLatticeValue) {
-    // TODO
+  if (OldLatticeValueIt != DataflowFacts.end()) {
+    OldLatticeValue = OldLatticeValueIt->second;
+    if (NewLatticeValue != OldLatticeValue) {
+      DataflowFacts[V_] = NewLatticeValue;
+      for(User *User: V_->users()) {
+        if(Instruction *UserInst = dyn_cast<Instruction>(User)) {
+          SSAWorkset.insert(UserInst);
+        }
+      }
+    }
+  } else {
+    DataflowFacts.insert(std::make_pair(V_, NewLatticeValue));
+    for(User *User: V_->users()) {
+      if(Instruction *UserInst = dyn_cast<Instruction>(User)) {
+        SSAWorkset.insert(UserInst);
+      }
+    }
   }
   //****************************** TODO 3 END ******************************
 }
