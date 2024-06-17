@@ -20,8 +20,7 @@ AnalysisKey SimpleSCCPAnalysis::Key;
 
 ConstantValue ConstantValue::meet(const ConstantValue &Other) const {
   assert(!(IsTop && IsBot) && "Can't be both Top and Bottom at same time.");
-  assert(!(Other.IsTop && Other.IsBot) &&
-         "Can't be both Top and Bottom at same time.");
+  assert(!(Other.IsTop && Other.IsBot) && "Can't be both Top and Bottom at same time.");
 
   if (IsTop) {
     return Other;
@@ -42,9 +41,7 @@ bool ConstantValue::operator==(const ConstantValue &Other) const {
   return true;
 }
 
-bool ConstantValue::operator!=(const ConstantValue &Other) const {
-  return !((*this) == Other);
-}
+bool ConstantValue::operator!=(const ConstantValue &Other) const { return !((*this) == Other); }
 
 bool CFGEdge::operator<(const struct CFGEdge &Other) const {
   std::uintptr_t ThisFrom = reinterpret_cast<std::uintptr_t>(From);
@@ -73,15 +70,20 @@ bool CFGEdge::operator==(const struct CFGEdge &Other) const {
  * Access basic algorithm variables through the reference `ThePass`.
  * (e.g., CFGWorset, DataflowFacts, ...)
  */
-ConstantValue
-SimpleSCCPAnalysis::InstructionVisitor::visitPHINode(const PHINode &I) {
+ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitPHINode(const PHINode &I) {
   ConstantValue NewValue = ConstantValue::top();
-  //* TODO 0.1 - visit(phi)
-  //******************************** TODO 0.1 ********************************
+  const BasicBlock *FromBlock = I.getParent();
   for (int i = 0, n = I.getNumIncomingValues(); i < n; ++i) {
-    // Paste from your project2
+    Value *IncomingValue = I.getIncomingValue(i);
+    if (Instruction *I = dyn_cast<Instruction>(IncomingValue)) {
+      const BasicBlock *ToBlock = I->getParent();
+      CFGEdge Edge = {ToBlock, FromBlock};
+      if (ThePass.isExecutableEdge(Edge)) {
+        ConstantValue IncomingConstant = ThePass.getConstantValue(*IncomingValue);
+        NewValue = NewValue.meet(IncomingConstant);
+      }
+    }
   }
-  //****************************** TODO 0.1 END ******************************
   return NewValue;
 }
 
@@ -96,8 +98,7 @@ SimpleSCCPAnalysis::InstructionVisitor::visitPHINode(const PHINode &I) {
  * Access basic algorithm variables through the reference `ThePass`.
  * (e.g., CFGWorset, DataflowFacts, ...)
  */
-ConstantValue
-SimpleSCCPAnalysis::InstructionVisitor::visitBranchInst(const BranchInst &I) {
+ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitBranchInst(const BranchInst &I) {
   if (I.isConditional()) {
     Value &Condition = *I.getCondition();
     ConstantValue C = ThePass.getConstantValue(Condition);
@@ -123,8 +124,7 @@ SimpleSCCPAnalysis::InstructionVisitor::visitBranchInst(const BranchInst &I) {
  * Access basic algorithm variables through the reference `ThePass`.
  * (e.g., CFGWorset, DataflowFacts, ...)
  */
-ConstantValue
-SimpleSCCPAnalysis::InstructionVisitor::visitICmpInst(const ICmpInst &I) {
+ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitICmpInst(const ICmpInst &I) {
   int64_t Int1, Int2, Result;
   Value &Operand1 = *I.getOperand(0);
   Value &Operand2 = *I.getOperand(1);
@@ -177,8 +177,7 @@ SimpleSCCPAnalysis::InstructionVisitor::visitICmpInst(const ICmpInst &I) {
  * Access basic algorithm variables through the reference `ThePass`.
  * (e.g., CFGWorset, DataflowFacts, ...)
  */
-ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitBinaryOperator(
-    const BinaryOperator &I) {
+ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitBinaryOperator(const BinaryOperator &I) {
   int64_t Int1, Int2, Result;
   Value &Operand1 = *I.getOperand(0);
   Value &Operand2 = *I.getOperand(1);
@@ -226,13 +225,12 @@ ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitBinaryOperator(
 /**
  * Default fallback function of `visit`.
  */
-ConstantValue
-SimpleSCCPAnalysis::InstructionVisitor::visitInstruction(const Instruction &I) {
+ConstantValue SimpleSCCPAnalysis::InstructionVisitor::visitInstruction(const Instruction &I) {
   return ConstantValue::bot();
 }
 
-SimpleSCCPAnalysis::DataflowFactsTy
-SimpleSCCPAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
+SimpleSCCPAnalysis::DataflowFactsTy SimpleSCCPAnalysis::run(Function &F,
+                                                            FunctionAnalysisManager &FAM) {
   analyze(F);
   return DataflowFacts;
 }
@@ -252,31 +250,79 @@ void SimpleSCCPAnalysis::analyze(Function &F) {
   DataflowFacts.clear();
 
   while (!CFGWorkset.empty() || !SSAWorkset.empty()) {
-    //* TODO 0.2 - Algorithm 1 : SCCP
-    //******************************* TODO 0.2 *******************************
-    // Paste from your project2
-    //***************************** TODO 0.2 END *****************************
+    if (!CFGWorkset.empty()) {
+      CFGEdge Edge = *CFGWorkset.begin();
+      const BasicBlock *ToBlock = Edge.To;
+      CFGWorkset.erase(Edge);
+      ExecutableEdges.insert(Edge);
+
+      // visit phis
+      for (const PHINode &Phi : ToBlock->phis()) {
+        visit(Phi);
+      }
+
+      // visit instructions if it is the first visit
+      if (isFirstVisit(*ToBlock)) {
+        for (const Instruction &I : *ToBlock) {
+          if (dyn_cast<PHINode>(&I)) {
+            continue;
+          } else {
+            visit(I);
+          }
+        }
+      }
+
+      // if one successor, add to CFGset
+      const Instruction *TI = ToBlock->getTerminator();
+      if (TI->getNumSuccessors() == 1) {
+        CFGEdge NewEdge = {ToBlock, TI->getSuccessor(0)};
+        if (ExecutableEdges.count(NewEdge) == 0) {
+          ExecutableEdges.insert(NewEdge);
+        }
+        CFGWorkset.insert(NewEdge);
+      }
+    } else {
+      const Instruction *V = *SSAWorkset.begin();
+      SSAWorkset.erase(V);
+      if (isa<PHINode>(*V)) {
+        visit(*dyn_cast<PHINode>(V));
+      } else if (isExecutableBlock(*V->getParent())) {
+        visit(*V);
+      }
+    }
   }
+  //***************************** TODO 2 END *****************************
 }
 
 /**
  * Visit an instruction. (`analyze`-helper)
  */
 void SimpleSCCPAnalysis::visit(const Instruction &I) {
-  ConstantValue NewLatticeValue =
-      TheVisitor.visit(const_cast<Instruction &>(I));
+  ConstantValue NewLatticeValue = TheVisitor.visit(const_cast<Instruction &>(I));
+  // Set default value.
   ConstantValue OldLatticeValue = ConstantValue::top();
-
-  //* TODO 0.3 - Algorithm 2 : visit
-  //******************************** TODO 0.3 ********************************
+  const Value *V = dyn_cast<Value>(&I);
+  Value *V_ = const_cast<Value *>(V);
   auto OldLatticeValueIt = DataflowFacts.find(&I);
-  if (OldLatticeValueIt != DataflowFacts.end())
-    OldLatticeValue = OldLatticeValueIt->second;
 
-  if (NewLatticeValue != OldLatticeValue) {
-    // Paste from your project2
+  if (OldLatticeValueIt != DataflowFacts.end()) {
+    OldLatticeValue = OldLatticeValueIt->second;
+    if (NewLatticeValue != OldLatticeValue) {
+      DataflowFacts[V_] = NewLatticeValue;
+      for (User *User : V_->users()) {
+        if (Instruction *UserInst = dyn_cast<Instruction>(User)) {
+          SSAWorkset.insert(UserInst);
+        }
+      }
+    }
+  } else {
+    DataflowFacts.insert(std::make_pair(V_, NewLatticeValue));
+    for (User *User : V_->users()) {
+      if (Instruction *UserInst = dyn_cast<Instruction>(User)) {
+        SSAWorkset.insert(UserInst);
+      }
+    }
   }
-  //****************************** TODO 0.3 END ******************************
 }
 
 bool SimpleSCCPAnalysis::isFirstVisit(const BasicBlock &BB) {
@@ -345,8 +391,8 @@ ConstantValue SimpleSCCPAnalysis::getConstantValue(const Value &Value) {
  * By dropping branch path, a destination block may no longer be reachable.
  * Thus, one should also manage the dangling incoming block at phi nodes.
  */
-bool SimpleSCCPTransform::foldConstants(Function &F,
-                                        AnalysisResultTy &DataflowFacts) {
+bool SimpleSCCPTransform::foldConstants(Function &F, AnalysisResultTy &DataflowFacts) {
+  // using DataflowFactsTy = llvm::DenseMap<llvm::Value *, ConstantValue>;
   bool madeChange = false;
 
   std::vector<Instruction *> AbondonedInst;
@@ -361,6 +407,108 @@ bool SimpleSCCPTransform::foldConstants(Function &F,
   // - Some conditional branches (`br`) might need to be replaced by
   // unconditional branch.
 
+  // loop through all the dataflow facts and RAUW
+  for (auto [V, CV] : DataflowFacts) {
+    if (CV.isConstant()) {
+      if (auto *I = dyn_cast<Instruction>(V)) {
+        if (I->use_empty()) {
+          AbondonedInst.push_back(I);
+        } else {
+          I->replaceAllUsesWith(ConstantInt::get(I->getType(), CV.value()));
+          AbondonedInst.push_back(I);
+        }
+      }
+    }
+  }
+
+  for (auto *I : AbondonedInst) {
+    I->removeFromParent();
+  }
+  AbondonedInst.clear();
+
+  // loop through all terminators and replace conditional branch with unconditional branch if
+  // condition is constant
+  for (llvm::BasicBlock &BB : F) {
+    llvm::Instruction *TI = BB.getTerminator();
+    if (auto *BI = dyn_cast<BranchInst>(TI)) {
+      if (BI->isConditional()) {
+        if (auto *CI = dyn_cast<ConstantInt>(BI->getCondition())) {
+          if (CI->isOne()) {
+            IRB.SetInsertPoint(TI);
+            llvm::BranchInst *NewBI = IRB.CreateBr(BI->getSuccessor(0));
+            TI->replaceAllUsesWith(NewBI);
+            AbondonedInst.push_back(TI);
+            // AbondonedBlock.push_back(BI->getSuccessor(1));
+            madeChange = true;
+          } else if (CI->isZero()) {
+            IRB.SetInsertPoint(TI);
+            llvm::BranchInst *NewBI = IRB.CreateBr(BI->getSuccessor(1));
+            TI->replaceAllUsesWith(NewBI);
+            AbondonedInst.push_back(TI);
+            // AbondonedBlock.push_back(BI->getSuccessor(0));
+            madeChange = true;
+          }
+        }
+      }
+    }
+  }
+
+  for (llvm::Instruction *I : AbondonedInst) {
+    I->removeFromParent();
+  }
+  AbondonedInst.clear();
+
+  // remove unreachable blocks
+  std::set<BasicBlock *> Reachable;
+  std::vector<BasicBlock *> WorkList;
+  BasicBlock *Entry = &F.getEntryBlock();
+
+  // Perform a DFS to find all reachable basic blocks
+  WorkList.push_back(Entry);
+  Reachable.insert(Entry);
+
+  while (!WorkList.empty()) {
+    BasicBlock *Current = WorkList.back();
+    WorkList.pop_back();
+
+    for (succ_iterator SI = succ_begin(Current), SE = succ_end(Current); SI != SE; ++SI) {
+      BasicBlock *Succ = *SI;
+      if (Reachable.insert(Succ).second) {
+        WorkList.push_back(Succ);
+      }
+    }
+  }
+
+  // Collect unreachable basic blocks
+  std::vector<BasicBlock *> Unreachable;
+  for (BasicBlock &BB : F) {
+    if (Reachable.find(&BB) == Reachable.end()) {
+      Unreachable.push_back(&BB);
+    }
+  }
+
+  // Remove unreachable basic blocks
+  for (BasicBlock *BB : Unreachable) {
+    // Remove all uses of the basic block to prevent dangling references
+    BB->replaceAllUsesWith(UndefValue::get(BB->getType()));
+    // Erase the block
+    BB->eraseFromParent();
+  }
+
+  // loop through all the phi nodes and remove incoming block if it is not reachable
+  for (llvm::BasicBlock &BB : F) {
+    for (llvm::PHINode &PN : BB.phis()) {
+      for (unsigned i = 0; i < PN.getNumIncomingValues(); i++) {
+        llvm::BasicBlock *IncomingBlock = PN.getIncomingBlock(i);
+        if (!IncomingBlock) {
+          continue; // reached from outside
+        }
+        PN.removeIncomingValue(i);
+        madeChange = true;
+      }
+    }
+  }
+
   //****************************** TODO 1 END ******************************
   return madeChange;
 }
@@ -368,8 +516,7 @@ bool SimpleSCCPTransform::foldConstants(Function &F,
 /**
  * Run Simple SCCP Transform.
  */
-PreservedAnalyses SimpleSCCPTransform::run(Function &F,
-                                           FunctionAnalysisManager &FAM) {
+PreservedAnalyses SimpleSCCPTransform::run(Function &F, FunctionAnalysisManager &FAM) {
   auto &DataflowFacts = FAM.getResult<SimpleSCCPAnalysis>(F);
 
   bool Changed = foldConstants(F, DataflowFacts);
@@ -379,8 +526,7 @@ PreservedAnalyses SimpleSCCPTransform::run(Function &F,
   return PreservedAnalyses::all();
 }
 
-PreservedAnalyses SimpleSCCPPrinter::run(Function &F,
-                                         FunctionAnalysisManager &FAM) {
+PreservedAnalyses SimpleSCCPPrinter::run(Function &F, FunctionAnalysisManager &FAM) {
   auto &DataflowFacts = FAM.getResult<SimpleSCCPAnalysis>(F);
   ROS << DataflowFacts;
   return PreservedAnalyses::all();
@@ -410,8 +556,7 @@ raw_ostream &operator<<(raw_ostream &ROS, const ConstantValue &C) {
   return ROS;
 }
 
-raw_ostream &operator<<(raw_ostream &ROS,
-                        const SimpleSCCPAnalysis::DataflowFactsTy &DF) {
+raw_ostream &operator<<(raw_ostream &ROS, const SimpleSCCPAnalysis::DataflowFactsTy &DF) {
   for (const auto &Entry : DF)
     errs() << getId(Entry.getFirst()) << " : " << Entry.getSecond() << "\n";
   return ROS;
@@ -467,15 +612,13 @@ void PBHook(PassBuilder &PB) {
 }
 
 PassPluginLibraryInfo getSCCPPrinterPluginInfo() {
-  return {
-      LLVM_PLUGIN_API_VERSION,
-      "Advanced Compilers - Simple Sparse Conditional Constants Propagation",
-      LLVM_VERSION_STRING, PBHook};
+  return {LLVM_PLUGIN_API_VERSION,
+          "Advanced Compilers - Simple Sparse Conditional Constants Propagation",
+          LLVM_VERSION_STRING, PBHook};
 }
 } // namespace
 
 // Pass registeration.
-extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-llvmGetPassPluginInfo() {
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK llvmGetPassPluginInfo() {
   return getSCCPPrinterPluginInfo();
 }
